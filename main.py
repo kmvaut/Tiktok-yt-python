@@ -9,16 +9,13 @@ from openai import OpenAI
 
 load_dotenv()
 
-# --- Clients ---
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# --- Paths ---
 BASE_DIR = Path(__file__).parent
 ASSETS_DIR = BASE_DIR / "assets"
 OUTPUT_DIR = BASE_DIR / "output"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# --- Config ---
 FFMPEG_EXE = r"C:\Users\Katai\Desktop\fejlesztes\ffmpeg-2026-03-12-git-9dc44b43b2-essentials_build\bin\ffmpeg.exe"
 
 
@@ -36,6 +33,7 @@ def load_config(config_path: Path) -> dict:
         "caption_max_chars",
         "caption_font_size",
         "caption_margin_v",
+        "speech_speed"
     ]
 
     for key in required_keys:
@@ -82,52 +80,117 @@ def load_video_jobs(file_path: Path) -> list[dict]:
     return jobs
 
 
-def generate_script(topic: str, language: str) -> str:
-    if language == "hu":
-        prompt = f"""
-Írj rövid, természetes magyar TikTok / YouTube Shorts szkriptet.
-
-Téma: {topic}
-
-Szabályok:
-- maximum 50 szó
-- rövid, teljes magyar mondatok
-- természetes magyar nyelv
-- helyes ragozás
-- könnyen kimondható mondatok
-- ne használj furcsa vagy túl angolos fordulatokat
-- az első mondat legyen figyelemfelkeltő
-- a végén legyen rövid CTA
-- ne használj markdownot
-- ne használj emojikat
-
-Stílus:
-- természetes
-- tiszta
-- közvetlen
-- rövid videós
-"""
-    else:
-        prompt = f"""
-Write a short, natural TikTok / YouTube Shorts script.
-
-Topic: {topic}
-
-Rules:
-- maximum 50 words
-- short spoken lines
-- natural conversational English
-- strong hook in the first line
-- short CTA at the end
-- no markdown
-- no emojis
-"""
-
+def call_text_model(prompt: str) -> str:
     response = client.responses.create(
         model="gpt-4.1-mini",
         input=prompt
     )
     return response.output_text.strip()
+
+
+def generate_hook_variants(topic: str, language: str, n: int = 3) -> list[str]:
+    if language == "hu":
+        prompt = f"""
+Írj {n} különböző TikTok hookot magyarul.
+
+Téma: {topic}
+
+Szabályok:
+- mindegyik külön sorban legyen
+- max 12 szó
+- legyenek különböző stílusok:
+  - kíváncsiság
+  - sokk
+  - titok
+- természetes magyar
+- ne használj emojit
+- ne számozd
+"""
+    else:
+        prompt = f"""
+Write {n} different TikTok hooks.
+
+Topic: {topic}
+
+Rules:
+- each on a new line
+- max 12 words
+- use different styles:
+  - curiosity
+  - shock
+  - secret
+- natural spoken English
+- no emojis
+- do not number them
+"""
+
+    text = call_text_model(prompt)
+    hooks = [line.strip("-• ").strip() for line in text.splitlines() if line.strip()]
+    return hooks[:n]
+
+
+def generate_body(topic: str, language: str) -> str:
+    if language == "hu":
+        prompt = f"""
+Írj rövid TikTok videó törzsszöveget magyarul.
+
+Téma: {topic}
+
+Szabályok:
+- 2-4 rövid mondat
+- legyen jól kimondható
+- természetes magyar legyen
+- ne legyen túl sűrű
+- ne legyen túl hosszú
+- ne használj emojit
+- csak a törzsszöveget add vissza
+"""
+    else:
+        prompt = f"""
+Write the body of a short TikTok video.
+
+Topic: {topic}
+
+Rules:
+- 2-4 short spoken sentences
+- natural spoken English
+- easy to narrate
+- short and punchy
+- no emojis
+- return only the body text
+"""
+    return call_text_model(prompt)
+
+
+def generate_cta(language: str) -> str:
+    if language == "hu":
+        prompt = """
+Írj 1 rövid CTA mondatot magyar TikTok videó végére.
+
+Szabályok:
+- maximum 8 szó
+- természetes legyen
+- ne legyen erőltetett
+- ne használj emojit
+- csak 1 mondatot adj vissza
+"""
+    else:
+        prompt = """
+Write 1 short CTA for the end of a TikTok video.
+
+Rules:
+- max 8 words
+- natural
+- not pushy
+- no emojis
+- return only 1 sentence
+"""
+    return call_text_model(prompt)
+
+
+def assemble_script(hook: str, body: str, cta: str) -> str:
+    parts = [hook.strip(), body.strip(), cta.strip()]
+    return "\n".join([p for p in parts if p])
 
 
 def postprocess_script(script: str, language: str) -> str:
@@ -142,6 +205,7 @@ Szabályok:
 - Ne írj teljesen új szöveget.
 - Ne hosszabbítsd meg jelentősen.
 - A vesszők maradhatnak, ha helyesek.
+- Tartsd meg a rövid videós stílust.
 - Csak a javított szöveget add vissza.
 
 Szöveg:
@@ -160,27 +224,8 @@ Rules:
 Text:
 {script}
 """
+    return call_text_model(prompt)
 
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=prompt
-    )
-    return response.output_text.strip()
-
-def speed_up_audio(input_file: Path, output_file: Path, speed: float) -> None:
-    if speed <= 0:
-        raise ValueError("A speech_speed értéke legyen 0-nál nagyobb.")
-
-    cmd = [
-        FFMPEG_EXE,
-        "-y",
-        "-i", str(input_file),
-        "-filter:a", f"atempo={speed}",
-        "-vn",
-        str(output_file)
-    ]
-
-    subprocess.run(cmd, check=True)
 
 def generate_voice(
     script: str,
@@ -197,6 +242,22 @@ def generate_voice(
 
     with open(output_file, "wb") as f:
         f.write(audio.read())
+
+
+def speed_up_audio(input_file: Path, output_file: Path, speed: float) -> None:
+    if speed <= 0:
+        raise ValueError("A speech_speed legyen 0-nál nagyobb.")
+
+    cmd = [
+        FFMPEG_EXE,
+        "-y",
+        "-i", str(input_file),
+        "-filter:a", f"atempo={speed}",
+        "-vn",
+        str(output_file)
+    ]
+
+    subprocess.run(cmd, check=True)
 
 
 def transcribe_to_verbose_json(audio_file: Path, output_json: Path) -> None:
@@ -236,8 +297,6 @@ def seconds_to_ass_time(seconds: float) -> str:
 def clean_text(text: str) -> str:
     text = text.replace("*", "")
     text = re.sub(r"[🚀✨🌌🤯😱🔥😂🤣]+", "", text)
-
-    # Maradhatnak vesszők, csak a whitespace-et tisztítjuk
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -336,14 +395,68 @@ def load_verbose_segments(verbose_json_file: Path) -> list[dict]:
     return cleaned
 
 
-def segments_to_chunk_events(segments: list[dict]) -> list[dict]:
+def split_script_sentences(script: str) -> list[str]:
+    lines = [line.strip() for line in script.splitlines() if line.strip()]
+    if lines:
+        return lines
+
+    parts = re.split(r"(?<=[.!?])\s+", script.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def allocate_sentence_times(script_sentences: list[str], segment_start: float, segment_end: float) -> list[dict]:
+    if not script_sentences:
+        return []
+
+    total_duration = max(0.1, segment_end - segment_start)
+    sentence_lengths = [max(1, len(s.split())) for s in script_sentences]
+    total_words = sum(sentence_lengths)
+
+    events = []
+    cursor = segment_start
+
+    for i, sentence in enumerate(script_sentences):
+        word_count = sentence_lengths[i]
+
+        if i == len(script_sentences) - 1:
+            start = cursor
+            end = segment_end
+        else:
+            fraction = word_count / total_words
+            dur = total_duration * fraction
+            start = cursor
+            end = start + dur
+            cursor = end
+
+        events.append({
+            "start": start,
+            "end": end,
+            "text": sentence
+        })
+
+    return events
+
+
+def segments_to_chunk_events_from_script(
+    segments: list[dict],
+    final_script: str
+) -> list[dict]:
+    if not segments:
+        return []
+
+    segment_start = segments[0]["start"]
+    segment_end = segments[-1]["end"]
+
+    script_sentences = split_script_sentences(final_script)
+    sentence_events = allocate_sentence_times(script_sentences, segment_start, segment_end)
+
     events = []
     min_chunk_duration = 0.90
 
-    for seg in segments:
-        text = seg["text"]
-        start = seg["start"]
-        end = seg["end"]
+    for sentence_event in sentence_events:
+        text = sentence_event["text"]
+        start = sentence_event["start"]
+        end = sentence_event["end"]
 
         words = text.split()
         if not words:
@@ -478,72 +591,94 @@ def render_video(
 
 def generate_single_video(topic: str, video_name: str, index: int, config: dict) -> None:
     video_stem = Path(video_name).stem
-    safe_name = video_stem
-
     background_video = ASSETS_DIR / video_name
+
     if not background_video.exists():
         raise FileNotFoundError(f"Hiányzik a videó: {background_video}")
-
-    script_file = OUTPUT_DIR / f"{safe_name}_script.txt"
-    raw_script_file = OUTPUT_DIR / f"{safe_name}_raw_script.txt"
-    voice_file = OUTPUT_DIR / f"{safe_name}_voice.mp3"
-    voice_fast_file = OUTPUT_DIR / f"{safe_name}_voice_fast.mp3"
-    transcript_json = OUTPUT_DIR / f"{safe_name}_transcript_verbose.json"
-    ass_file = OUTPUT_DIR / f"{safe_name}_captions_tiktok.ass"
-    output_video = OUTPUT_DIR / f"{safe_name}_final_video.mp4"
 
     if config["language"] == "hu":
         tts_instructions = config["tts_instructions_hu"]
     else:
         tts_instructions = config["tts_instructions_en"]
 
-    print(f"\n=== {index}. videó készítése ===")
+    print(f"\n=== {index}. téma ===")
     print(f"Téma: {topic}")
-    print(f"Forrásvideó: {background_video.name}")
-    print(f"Nyelv: {config['language']}")
 
-    print("1. Script generálása...")
-    raw_script = generate_script(topic, config["language"])
-    raw_script_file.write_text(raw_script, encoding="utf-8")
+    print("1. Hook variációk generálása...")
+    hooks = generate_hook_variants(topic, config["language"], n=3)
 
-    print("1.5 Script javítása...")
-    script = postprocess_script(raw_script, config["language"])
-    print(script)
-    script_file.write_text(script, encoding="utf-8")
+    print("2. Body generálása...")
+    body = generate_body(topic, config["language"])
+    print(body)
 
-    print("2. Hang generálása OpenAI TTS-sel...")
-    generate_voice(
-        script,
-        voice_file,
-        voice=config["voice"],
-        tts_instructions=tts_instructions
-    )
+    print("3. CTA generálása...")
+    cta = generate_cta(config["language"])
+    print(cta)
 
-    print("2.5 Hang gyorsítása...")
-    speed_up_audio(
-        voice_file,
-        voice_fast_file,
-        speed=float(config["speech_speed"])
-    )
+    for i, hook in enumerate(hooks, start=1):
+        print(f"\n--- Hook {i} ---")
+        print(hook)
 
-    print("3. Verbose transcript generálása...")
-    transcribe_to_verbose_json(voice_fast_file, transcript_json)
+        safe_name = f"{video_stem}_hook{i}"
 
-    print("4. Caption engine futtatása...")
-    segments = load_verbose_segments(transcript_json)
-    events = segments_to_chunk_events(segments)
-    write_chunk_ass(
-        events,
-        ass_file,
-        caption_max_chars=config["caption_max_chars"],
-        caption_font_size=config["caption_font_size"],
-        caption_margin_v=config["caption_margin_v"]
-    )
+        hook_file = OUTPUT_DIR / f"{safe_name}_hook.txt"
+        body_file = OUTPUT_DIR / f"{safe_name}_body.txt"
+        cta_file = OUTPUT_DIR / f"{safe_name}_cta.txt"
+        raw_script_file = OUTPUT_DIR / f"{safe_name}_raw_script.txt"
+        script_file = OUTPUT_DIR / f"{safe_name}_script.txt"
+        voice_file = OUTPUT_DIR / f"{safe_name}_voice.mp3"
+        voice_fast_file = OUTPUT_DIR / f"{safe_name}_voice_fast.mp3"
+        transcript_json = OUTPUT_DIR / f"{safe_name}_transcript.json"
+        ass_file = OUTPUT_DIR / f"{safe_name}.ass"
+        output_video = OUTPUT_DIR / f"{safe_name}_final.mp4"
 
-    print("5. Videó renderelése...")
-    render_video(background_video, voice_fast_file, ass_file, output_video)
+        hook_file.write_text(hook, encoding="utf-8")
+        body_file.write_text(body, encoding="utf-8")
+        cta_file.write_text(cta, encoding="utf-8")
 
-    print(f"Kész: {output_video}")
+        print("4. Script összeállítása...")
+        raw_script = assemble_script(hook, body, cta)
+        raw_script_file.write_text(raw_script, encoding="utf-8")
+
+        print("5. Script javítása...")
+        script = postprocess_script(raw_script, config["language"])
+        script_file.write_text(script, encoding="utf-8")
+        print(script)
+
+        print("6. Hang generálása...")
+        generate_voice(
+            script,
+            voice_file,
+            voice=config["voice"],
+            tts_instructions=tts_instructions
+        )
+
+        print("6.5 Hang gyorsítása...")
+        speed_up_audio(
+            voice_file,
+            voice_fast_file,
+            speed=float(config["speech_speed"])
+        )
+
+        print("7. Transcript...")
+        transcribe_to_verbose_json(voice_fast_file, transcript_json)
+
+        print("8. Caption...")
+        segments = load_verbose_segments(transcript_json)
+        events = segments_to_chunk_events_from_script(segments, script)
+
+        write_chunk_ass(
+            events,
+            ass_file,
+            caption_max_chars=config["caption_max_chars"],
+            caption_font_size=config["caption_font_size"],
+            caption_margin_v=config["caption_margin_v"]
+        )
+
+        print("9. Render...")
+        render_video(background_video, voice_fast_file, ass_file, output_video)
+
+        print(f"Kész: {output_video}")
 
 
 def main():
