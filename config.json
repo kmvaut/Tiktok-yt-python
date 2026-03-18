@@ -1,0 +1,10 @@
+{
+  "language": "hu",
+  "voice": "alloy",
+  "tts_instructions_hu": "Beszélj tiszta, természetes magyar kiejtéssel. A hangsúly legyen magyaros, ne angolos. Beszélj közérthetően, kicsit lendületesebben, természetes rövid szünetekkel.",
+  "tts_instructions_en": "Speak clearly in a natural short-form creator style. Sound modern, energetic, and a bit faster than normal, while staying clear and easy to understand.",
+  "caption_max_chars": 13,
+  "caption_font_size": 65,
+  "caption_margin_v": 400,
+  "speech_speed": 1.10
+}
