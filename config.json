@@ -1,10 +1,21 @@
 {
   "language": "hu",
   "voice": "alloy",
-  "tts_instructions_hu": "Beszélj tiszta, természetes magyar kiejtéssel. A hangsúly legyen magyaros, ne angolos. Beszélj közérthetően, kicsit lendületesebben, természetes rövid szünetekkel.",
-  "tts_instructions_en": "Speak clearly in a natural short-form creator style. Sound modern, energetic, and a bit faster than normal, while staying clear and easy to understand.",
+  "tts_instructions_hu": "Beszélj tiszta, természetes magyar kiejtéssel. A hangsúly legyen magyaros, ne angolos. Beszélj közérthetően, modern videós stílusban. Legyen kissé lendületes, de természetes. Tarts rövid, természetes szüneteket.",
+  "tts_instructions_en": "Speak clearly in a natural short-form creator style. Sound modern, energetic, and easy to understand. Use short natural pauses.",
   "caption_max_chars": 13,
-  "caption_font_size": 65,
-  "caption_margin_v": 400,
-  "speech_speed": 1.10
+  "caption_font_size": 42,
+  "caption_margin_v": 340,
+  "speech_speed": 1.08,
+  "visual_zoom_speed": 0.0008,
+  "visual_contrast": 1.05,
+  "visual_saturation": 1.10,
+  "hook_font_size": 54,
+  "hook_margin_v": 420,
+  "cta_font_size": 38,
+  "cta_margin_v": 280,
+  "intro_overlay_duration": 0.55,
+  "intro_overlay_alpha": 0.18,
+  "intro_caption_max_chars": 11,
+  "hook_variants": 1
 }

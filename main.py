@@ -33,7 +33,18 @@ def load_config(config_path: Path) -> dict:
         "caption_max_chars",
         "caption_font_size",
         "caption_margin_v",
-        "speech_speed"
+        "speech_speed",
+        "visual_zoom_speed",
+        "visual_contrast",
+        "visual_saturation",
+        "hook_font_size",
+        "hook_margin_v",
+        "cta_font_size",
+        "cta_margin_v",
+        "intro_overlay_duration",
+        "intro_overlay_alpha",
+        "intro_caption_max_chars",
+        "hook_variants"
     ]
 
     for key in required_keys:
@@ -42,6 +53,9 @@ def load_config(config_path: Path) -> dict:
 
     if config["language"] not in ["hu", "en"]:
         raise ValueError("A config.json 'language' mezője csak 'hu' vagy 'en' lehet.")
+
+    if int(config["hook_variants"]) < 1:
+        raise ValueError("A hook_variants legalább 1 legyen.")
 
     return config
 
@@ -97,11 +111,13 @@ Téma: {topic}
 
 Szabályok:
 - mindegyik külön sorban legyen
-- max 12 szó
-- legyenek különböző stílusok:
+- maximum 12 szó
+- különböző stílusok legyenek:
   - kíváncsiság
   - sokk
   - titok
+  - figyelmeztetés
+  - meglepő állítás
 - természetes magyar
 - ne használj emojit
 - ne számozd
@@ -114,11 +130,13 @@ Topic: {topic}
 
 Rules:
 - each on a new line
-- max 12 words
+- maximum 12 words
 - use different styles:
   - curiosity
   - shock
   - secret
+  - warning
+  - surprising claim
 - natural spoken English
 - no emojis
 - do not number them
@@ -126,6 +144,10 @@ Rules:
 
     text = call_text_model(prompt)
     hooks = [line.strip("-• ").strip() for line in text.splitlines() if line.strip()]
+
+    if len(hooks) < n:
+        hooks = hooks + hooks[: max(0, n - len(hooks))]
+
     return hooks[:n]
 
 
@@ -179,7 +201,7 @@ Szabályok:
 Write 1 short CTA for the end of a TikTok video.
 
 Rules:
-- max 8 words
+- maximum 8 words
 - natural
 - not pushy
 - no emojis
@@ -265,7 +287,8 @@ def transcribe_to_verbose_json(audio_file: Path, output_json: Path) -> None:
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
             file=f,
-            response_format="verbose_json"
+            response_format="verbose_json",
+            timestamp_granularities=["word", "segment"]
         )
 
     if hasattr(transcript, "model_dump_json"):
@@ -280,6 +303,45 @@ def transcribe_to_verbose_json(audio_file: Path, output_json: Path) -> None:
             json.dumps(transcript, indent=2, ensure_ascii=False),
             encoding="utf-8"
         )
+
+
+def load_verbose_transcript(verbose_json_file: Path) -> dict:
+    data = json.loads(verbose_json_file.read_text(encoding="utf-8"))
+
+    segments = data.get("segments", []) or []
+    words = data.get("words", []) or []
+
+    cleaned_segments = []
+    for seg in segments:
+        text = clean_text(seg.get("text", ""))
+        start = float(seg.get("start", 0))
+        end = float(seg.get("end", 0))
+
+        if text and end > start:
+            cleaned_segments.append({
+                "start": start,
+                "end": end,
+                "text": text
+            })
+
+    cleaned_words = []
+    for word_item in words:
+        word = clean_text(word_item.get("word", ""))
+        start = float(word_item.get("start", 0))
+        end = float(word_item.get("end", 0))
+
+        if word and end > start:
+            cleaned_words.append({
+                "word": word,
+                "start": start,
+                "end": end
+            })
+
+    return {
+        "segments": cleaned_segments,
+        "words": cleaned_words,
+        "text": clean_text(data.get("text", ""))
+    }
 
 
 def seconds_to_ass_time(seconds: float) -> str:
@@ -375,26 +437,6 @@ def wrap_text(text: str, max_chars: int = 13) -> str:
     return r"\N".join(lines)
 
 
-def load_verbose_segments(verbose_json_file: Path) -> list[dict]:
-    data = json.loads(verbose_json_file.read_text(encoding="utf-8"))
-    segments = data.get("segments", [])
-
-    cleaned = []
-    for seg in segments:
-        text = clean_text(seg.get("text", ""))
-        start = float(seg.get("start", 0))
-        end = float(seg.get("end", 0))
-
-        if text and end > start:
-            cleaned.append({
-                "start": start,
-                "end": end,
-                "text": text
-            })
-
-    return cleaned
-
-
 def split_script_sentences(script: str) -> list[str]:
     lines = [line.strip() for line in script.splitlines() if line.strip()]
     if lines:
@@ -428,16 +470,127 @@ def allocate_sentence_times(script_sentences: list[str], segment_start: float, s
             end = start + dur
             cursor = end
 
+        event_type = "body"
+        if i == 0:
+            event_type = "hook"
+        elif i == len(script_sentences) - 1:
+            event_type = "cta"
+
         events.append({
             "start": start,
             "end": end,
-            "text": sentence
+            "text": sentence,
+            "type": event_type
         })
 
     return events
 
 
-def segments_to_chunk_events_from_script(
+def build_word_timed_events_from_script(
+    transcript_data: dict,
+    final_script: str
+) -> list[dict]:
+    words = transcript_data.get("words", []) or []
+    segments = transcript_data.get("segments", []) or []
+
+    # fallback
+    if not words:
+        return build_estimated_events_from_script(segments, final_script)
+
+    script_sentences = split_script_sentences(final_script)
+    if not script_sentences:
+        return build_estimated_events_from_script(segments, final_script)
+
+    total_word_count = len(words)
+    sentence_lengths = [max(1, len(s.split())) for s in script_sentences]
+    target_total = sum(sentence_lengths)
+
+    # szóelosztás sentence-enként a script alapján
+    assigned_counts = []
+    consumed = 0
+    for i, length in enumerate(sentence_lengths):
+        if i == len(sentence_lengths) - 1:
+            count = total_word_count - consumed
+        else:
+            ratio = length / target_total
+            count = max(1, round(total_word_count * ratio))
+            remaining_min = len(sentence_lengths) - (i + 1)
+            max_now = total_word_count - consumed - remaining_min
+            count = min(count, max_now)
+        assigned_counts.append(count)
+        consumed += count
+
+    # korrigálás
+    diff = total_word_count - sum(assigned_counts)
+    if diff != 0 and assigned_counts:
+        assigned_counts[-1] += diff
+
+    sentence_events = []
+    idx = 0
+    for sent_idx, sentence in enumerate(script_sentences):
+        count = assigned_counts[sent_idx]
+        sentence_words = words[idx: idx + count]
+        idx += count
+
+        if not sentence_words:
+            continue
+
+        start = sentence_words[0]["start"]
+        end = sentence_words[-1]["end"]
+
+        event_type = "body"
+        if sent_idx == 0:
+            event_type = "hook"
+        elif sent_idx == len(script_sentences) - 1:
+            event_type = "cta"
+
+        sentence_events.append({
+            "start": start,
+            "end": end,
+            "text": sentence,
+            "type": event_type,
+            "word_times": sentence_words
+        })
+
+    events = []
+
+    for sentence_event in sentence_events:
+        text = sentence_event["text"]
+        event_type = sentence_event["type"]
+        word_times = sentence_event["word_times"]
+
+        display_words = text.split()
+        chunks = smart_chunk_words(display_words, min_words=4, max_words=7)
+
+        if not chunks:
+            continue
+
+        cursor = 0
+        for chunk in chunks:
+            count = len(chunk)
+            matched_word_times = word_times[cursor: cursor + count]
+            cursor += count
+
+            if not matched_word_times:
+                continue
+
+            chunk_start = matched_word_times[0]["start"]
+            chunk_end = matched_word_times[-1]["end"]
+            chunk_text = " ".join(chunk)
+            chunk_text = re.sub(r"\s+([,.!?])", r"\1", chunk_text)
+
+            events.append({
+                "start": chunk_start,
+                "end": chunk_end,
+                "text": chunk_text,
+                "type": event_type,
+                "word_times": matched_word_times
+            })
+
+    return events
+
+
+def build_estimated_events_from_script(
     segments: list[dict],
     final_script: str
 ) -> list[dict]:
@@ -457,6 +610,7 @@ def segments_to_chunk_events_from_script(
         text = sentence_event["text"]
         start = sentence_event["start"]
         end = sentence_event["end"]
+        event_type = sentence_event["type"]
 
         words = text.split()
         if not words:
@@ -496,16 +650,41 @@ def segments_to_chunk_events_from_script(
             chunk_text = " ".join(chunk)
             chunk_text = re.sub(r"\s+([,.!?])", r"\1", chunk_text)
 
+            # becsült word times
+            chunk_duration = max(0.05, chunk_end - chunk_start)
+            per_word = chunk_duration / len(chunk)
+
+            word_times = []
+            for wi, w in enumerate(chunk):
+                w_start = chunk_start + wi * per_word
+                w_end = chunk_start + (wi + 1) * per_word
+                if wi == len(chunk) - 1:
+                    w_end = chunk_end
+                word_times.append({
+                    "word": w,
+                    "start": w_start,
+                    "end": w_end
+                })
+
             events.append({
                 "start": chunk_start,
                 "end": chunk_end,
-                "text": chunk_text
+                "text": chunk_text,
+                "type": event_type,
+                "word_times": word_times
             })
 
     return events
 
 
-def make_ass_header(font_size: int, margin_v: int) -> str:
+def make_ass_header(
+    font_size: int,
+    margin_v: int,
+    hook_font_size: int,
+    hook_margin_v: int,
+    cta_font_size: int,
+    cta_margin_v: int
+) -> str:
     return f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -518,6 +697,10 @@ YCbCr Matrix: TV.709
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Base,Arial,{font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H32000000,1,0,0,0,100,100,0,0,1,3,0,2,80,80,{margin_v},1
 Style: Active,Arial,{font_size},&H0000FFFF,&H0000FFFF,&H00000000,&H32000000,1,0,0,0,100,100,0,0,1,3,0,2,80,80,{margin_v},1
+Style: HookBase,Arial,{hook_font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H32000000,1,0,0,0,100,100,0,0,1,4,0,2,70,70,{hook_margin_v},1
+Style: HookActive,Arial,{hook_font_size},&H0000FFFF,&H0000FFFF,&H00000000,&H32000000,1,0,0,0,100,100,0,0,1,4,0,2,70,70,{hook_margin_v},1
+Style: CtaBase,Arial,{cta_font_size},&H00FFFFFF,&H00FFFFFF,&H00000000,&H32000000,1,0,0,0,100,100,0,0,1,4,0,2,70,70,{cta_margin_v},1
+Style: CtaActive,Arial,{cta_font_size},&H0000FF99,&H0000FF99,&H00000000,&H32000000,1,0,0,0,100,100,0,0,1,4,0,2,70,70,{cta_margin_v},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -525,33 +708,113 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
 
 def escape_ass_text(text: str) -> str:
-    text = text.replace(r"\N", "__LINEBREAK__")
     text = text.replace("\\", r"\\")
     text = text.replace("{", r"\{")
     text = text.replace("}", r"\}")
-    text = text.replace("__LINEBREAK__", r"\N")
     return text
 
 
-def write_chunk_ass(
+def write_word_highlight_ass(
     events: list[dict],
     ass_file: Path,
     caption_max_chars: int,
+    intro_caption_max_chars: int,
     caption_font_size: int,
-    caption_margin_v: int
+    caption_margin_v: int,
+    hook_font_size: int,
+    hook_margin_v: int,
+    cta_font_size: int,
+    cta_margin_v: int
 ) -> None:
-    lines = [make_ass_header(caption_font_size, caption_margin_v)]
+    lines = [make_ass_header(
+        caption_font_size,
+        caption_margin_v,
+        hook_font_size,
+        hook_margin_v,
+        cta_font_size,
+        cta_margin_v
+    )]
 
     for ev in events:
-        start = seconds_to_ass_time(ev["start"])
-        end = seconds_to_ass_time(ev["end"])
+        chunk_text = ev["text"].strip()
+        event_type = ev.get("type", "body")
+        word_times = ev.get("word_times", [])
 
-        wrapped_text = wrap_text(ev["text"], max_chars=caption_max_chars)
-        text = escape_ass_text(wrapped_text)
+        if not chunk_text or not word_times:
+            continue
 
-        lines.append(
-            f"Dialogue: 0,{start},{end},Active,,0,0,0,,{text}"
-        )
+        if event_type == "hook":
+            max_chars = intro_caption_max_chars
+            base_style = "HookBase"
+            active_style = "HookActive"
+        elif event_type == "cta":
+            max_chars = caption_max_chars
+            base_style = "CtaBase"
+            active_style = "CtaActive"
+        else:
+            max_chars = caption_max_chars
+            base_style = "Base"
+            active_style = "Active"
+
+        wrapped_text = wrap_text(chunk_text, max_chars=max_chars)
+
+        wrapped_parts = wrapped_text.split(r"\N")
+        flat_tokens = []
+
+        for line_idx, part in enumerate(wrapped_parts):
+            line_words = [w for w in part.split() if w]
+            flat_tokens.extend(line_words)
+            if line_idx < len(wrapped_parts) - 1:
+                flat_tokens.append(r"\N")
+
+        real_word_positions = [i for i, tok in enumerate(flat_tokens) if tok != r"\N"]
+        real_words = [flat_tokens[i] for i in real_word_positions]
+
+        # ha a tördelés miatt eltérne a darabszám, fallback az event word_times-ára
+        if len(real_words) != len(word_times):
+            real_words = [w["word"] for w in word_times]
+            flat_tokens = real_words[:]
+            real_word_positions = list(range(len(real_words)))
+
+        for highlight_idx in range(len(word_times)):
+            start = float(word_times[highlight_idx]["start"])
+            end = float(word_times[highlight_idx]["end"])
+
+            if end <= start:
+                end = start + 0.05
+
+            rendered_tokens = []
+            real_idx = 0
+
+            for tok in flat_tokens:
+                if tok == r"\N":
+                    rendered_tokens.append(r"\N")
+                    continue
+
+                safe_tok = escape_ass_text(tok)
+
+                if real_idx == highlight_idx:
+                    rendered_tokens.append(r"{\r" + active_style + "}" + safe_tok + r"{\r" + base_style + "}")
+                else:
+                    rendered_tokens.append(safe_tok)
+
+                real_idx += 1
+
+            ass_text = ""
+            for tok in rendered_tokens:
+                if tok == r"\N":
+                    ass_text += r"\N"
+                else:
+                    if ass_text and not ass_text.endswith(r"\N"):
+                        ass_text += " "
+                    ass_text += tok
+
+            start_ass = seconds_to_ass_time(start)
+            end_ass = seconds_to_ass_time(end)
+
+            lines.append(
+                f"Dialogue: 0,{start_ass},{end_ass},{base_style},,0,0,0,,{ass_text}"
+            )
 
     ass_file.write_text("\n".join(lines), encoding="utf-8")
 
@@ -560,13 +823,21 @@ def render_video(
     background_video: Path,
     voice_file: Path,
     ass_file: Path,
-    output_video: Path
+    output_video: Path,
+    zoom_speed: float,
+    contrast: float,
+    saturation: float,
+    intro_overlay_duration: float,
+    intro_overlay_alpha: float
 ) -> None:
     ass_path = str(ass_file).replace("\\", "/").replace(":", "\\:")
 
     vf_filter = (
-        f"scale=1080:1920:force_original_aspect_ratio=increase,"
-        f"crop=1080:1920,"
+        "scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,"
+        f"eq=contrast={contrast}:saturation={saturation},"
+        f"drawbox=x=0:y=0:w=iw:h=ih:color=black@{intro_overlay_alpha}:t=fill:enable='between(t,0,{intro_overlay_duration})',"
+        f"zoompan=z='min(zoom+{zoom_speed},1.08)':d=1:s=1080x1920:fps=30,"
         f"ass='{ass_path}'"
     )
 
@@ -589,6 +860,10 @@ def render_video(
     subprocess.run(cmd, check=True)
 
 
+def ensure_dir(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+
+
 def generate_single_video(topic: str, video_name: str, index: int, config: dict) -> None:
     video_stem = Path(video_name).stem
     background_video = ASSETS_DIR / video_name
@@ -596,16 +871,22 @@ def generate_single_video(topic: str, video_name: str, index: int, config: dict)
     if not background_video.exists():
         raise FileNotFoundError(f"Hiányzik a videó: {background_video}")
 
+    video_output_dir = OUTPUT_DIR / video_stem
+    ensure_dir(video_output_dir)
+
     if config["language"] == "hu":
         tts_instructions = config["tts_instructions_hu"]
     else:
         tts_instructions = config["tts_instructions_en"]
 
+    hook_count = int(config["hook_variants"])
+
     print(f"\n=== {index}. téma ===")
     print(f"Téma: {topic}")
+    print(f"Hook variációk száma: {hook_count}")
 
     print("1. Hook variációk generálása...")
-    hooks = generate_hook_variants(topic, config["language"], n=3)
+    hooks = generate_hook_variants(topic, config["language"], n=hook_count)
 
     print("2. Body generálása...")
     body = generate_body(topic, config["language"])
@@ -619,18 +900,19 @@ def generate_single_video(topic: str, video_name: str, index: int, config: dict)
         print(f"\n--- Hook {i} ---")
         print(hook)
 
-        safe_name = f"{video_stem}_hook{i}"
+        hook_dir = video_output_dir / f"hook_{i}"
+        ensure_dir(hook_dir)
 
-        hook_file = OUTPUT_DIR / f"{safe_name}_hook.txt"
-        body_file = OUTPUT_DIR / f"{safe_name}_body.txt"
-        cta_file = OUTPUT_DIR / f"{safe_name}_cta.txt"
-        raw_script_file = OUTPUT_DIR / f"{safe_name}_raw_script.txt"
-        script_file = OUTPUT_DIR / f"{safe_name}_script.txt"
-        voice_file = OUTPUT_DIR / f"{safe_name}_voice.mp3"
-        voice_fast_file = OUTPUT_DIR / f"{safe_name}_voice_fast.mp3"
-        transcript_json = OUTPUT_DIR / f"{safe_name}_transcript.json"
-        ass_file = OUTPUT_DIR / f"{safe_name}.ass"
-        output_video = OUTPUT_DIR / f"{safe_name}_final.mp4"
+        hook_file = hook_dir / "hook.txt"
+        body_file = hook_dir / "body.txt"
+        cta_file = hook_dir / "cta.txt"
+        raw_script_file = hook_dir / "raw_script.txt"
+        script_file = hook_dir / "script.txt"
+        voice_file = hook_dir / "voice.mp3"
+        voice_fast_file = hook_dir / "voice_fast.mp3"
+        transcript_json = hook_dir / "transcript.json"
+        ass_file = hook_dir / "captions.ass"
+        output_video = hook_dir / "final.mp4"
 
         hook_file.write_text(hook, encoding="utf-8")
         body_file.write_text(body, encoding="utf-8")
@@ -660,23 +942,38 @@ def generate_single_video(topic: str, video_name: str, index: int, config: dict)
             speed=float(config["speech_speed"])
         )
 
-        print("7. Transcript...")
+        print("7. Transcript szó-időzítéssel...")
         transcribe_to_verbose_json(voice_fast_file, transcript_json)
 
         print("8. Caption...")
-        segments = load_verbose_segments(transcript_json)
-        events = segments_to_chunk_events_from_script(segments, script)
+        transcript_data = load_verbose_transcript(transcript_json)
+        events = build_word_timed_events_from_script(transcript_data, script)
 
-        write_chunk_ass(
+        write_word_highlight_ass(
             events,
             ass_file,
-            caption_max_chars=config["caption_max_chars"],
-            caption_font_size=config["caption_font_size"],
-            caption_margin_v=config["caption_margin_v"]
+            caption_max_chars=int(config["caption_max_chars"]),
+            intro_caption_max_chars=int(config["intro_caption_max_chars"]),
+            caption_font_size=int(config["caption_font_size"]),
+            caption_margin_v=int(config["caption_margin_v"]),
+            hook_font_size=int(config["hook_font_size"]),
+            hook_margin_v=int(config["hook_margin_v"]),
+            cta_font_size=int(config["cta_font_size"]),
+            cta_margin_v=int(config["cta_margin_v"])
         )
 
         print("9. Render...")
-        render_video(background_video, voice_fast_file, ass_file, output_video)
+        render_video(
+            background_video,
+            voice_fast_file,
+            ass_file,
+            output_video,
+            zoom_speed=float(config["visual_zoom_speed"]),
+            contrast=float(config["visual_contrast"]),
+            saturation=float(config["visual_saturation"]),
+            intro_overlay_duration=float(config["intro_overlay_duration"]),
+            intro_overlay_alpha=float(config["intro_overlay_alpha"])
+        )
 
         print(f"Kész: {output_video}")
 
@@ -700,6 +997,7 @@ def main():
     print(f"{len(jobs)} videófeladat betöltve.")
     print(f"Nyelv: {config['language']}")
     print(f"Voice: {config['voice']}")
+    print(f"Hook variációk: {config['hook_variants']}")
 
     for i, job in enumerate(jobs, start=1):
         try:
