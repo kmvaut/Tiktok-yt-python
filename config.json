@@ -1,21 +1,69 @@
 {
   "language": "hu",
   "voice": "alloy",
-  "tts_instructions_hu": "Beszélj tiszta, természetes magyar kiejtéssel. A hangsúly legyen magyaros, ne angolos. Beszélj közérthetően, modern videós stílusban. Legyen kissé lendületes, de természetes. Tarts rövid, természetes szüneteket.",
+
+  "text_model": "gpt-4.1-mini",
+  "tts_model": "gpt-4o-mini-tts",
+  "transcription_model": "whisper-1",
+
+  "tts_instructions_hu": "Beszélj tiszta, természetes magyar kiejtéssel. A hangsúly legyen magyaros, ne angolos. Modern, rövid videós stílusban beszélj. Legyen energikus, de ne kapkodó. Tarts rövid, természetes szüneteket.",
   "tts_instructions_en": "Speak clearly in a natural short-form creator style. Sound modern, energetic, and easy to understand. Use short natural pauses.",
-  "caption_max_chars": 13,
-  "caption_font_size": 42,
-  "caption_margin_v": 340,
+
+  "caption_time_offset_sec": 0.08,
+  "caption_gap_before_next_sec": 0.0,
+  "caption_comma_pause_sec": 0.10,
+  "caption_sentence_pause_sec": 0.14,
+  "caption_max_cumulative_pause_shift_sec": 0.18,
+  "caption_moved_word_min_duration_sec": 0.12,
+  "caption_end_hold_sec": 0.18,
+
+  "caption_chunk_min_words": 2,
+  "caption_chunk_max_words": 4,
+  "caption_phrase_min_words": 2,
+  "caption_phrase_max_words": 6,
+
+  "caption_max_lines": 2,
+  "caption_max_chars": 11,
+  "intro_caption_max_chars": 10,
+  "cta_caption_max_chars": 14,
+
+  "caption_font_size": 40,
+  "caption_margin_v": 420,
+  "hook_font_size": 52,
+  "hook_margin_v": 520,
+  "cta_font_size": 36,
+  "cta_margin_v": 340,
+
   "speech_speed": 1.08,
-  "visual_zoom_speed": 0.0008,
+  "speech_volume": 1.0,
+  "trim_silence": false,
+
   "visual_contrast": 1.05,
   "visual_saturation": 1.10,
-  "hook_font_size": 54,
-  "hook_margin_v": 420,
-  "cta_font_size": 38,
-  "cta_margin_v": 280,
+  "visual_brightness": 0.02,
+
   "intro_overlay_duration": 0.55,
   "intro_overlay_alpha": 0.18,
-  "intro_caption_max_chars": 11,
-  "hook_variants": 1
+
+  "target_fps": 30,
+  "target_width": 1080,
+  "target_height": 1920,
+
+  "hook_variants": 2,
+  "body_variants": 1,
+  "cta_variants": 1,
+
+  "top_variants_to_render": 1,
+
+  "min_total_words": 18,
+  "max_total_words": 48,
+  "ideal_duration_min_sec": 11,
+  "ideal_duration_max_sec": 28,
+
+  "scene_change_every_sec": 2.8,
+  "max_scenes_per_video": 4,
+
+  "title_max_chars": 85,
+  "description_max_chars": 350,
+  "hashtags_count": 6
 }

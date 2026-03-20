@@ -1,8 +1,13 @@
 .env
-.venv/
-venv/
+
 __pycache__/
 *.pyc
-assets/
+
 output/
+assets/
+
+*.mp4
+*.mp3
+
 .vscode/
+.idea/
